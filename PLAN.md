@@ -10,6 +10,10 @@ SNS(인스타, 블로그, 유튜브 등)에서 추천받아 카카오톡으로 �
 
 하는 단일 HTML 기반 도구를 만든다.
 
+> **운영 전제 (확정)**
+> - **개인용 / 로컬 전용** (`http://localhost`에서만 사용, 외부 배포 없음)
+> - 요약 LLM은 **Google Gemini API** 사용
+
 ---
 
 ## 2. 전체 흐름 (User Flow)
@@ -68,7 +72,8 @@ SNS(인스타, 블로그, 유튜브 등)에서 추천받아 카카오톡으로 �
 | HTML 파서    | `cheerio`                                       |
 | HTTP         | `undici` / `node-fetch`                         |
 | 도서관 세션  | `tough-cookie` + `got`  (쿠키 유지)             |
-| 검색/요약    | **Exa MCP** (smithery `exa`)                    |
+| 검색         | **Exa MCP** (smithery `exa`) — 웹 검색·본문 수집 |
+| 요약 LLM     | **Google Gemini API** (`gemini-2.5-flash`)      |
 | UI 레퍼런스  | **Context7 MCP** (smithery `upstash/context7-mcp`) |
 | 시크릿 관리  | `.env` + `dotenv` (절대 커밋 금지)              |
 
@@ -76,20 +81,26 @@ SNS(인스타, 블로그, 유튜브 등)에서 추천받아 카카오톡으로 �
 
 ## 4. 보안 / 시크릿 처리 (중요)
 
-> **현재 이 이슈 본문에 ID/PW가 평문으로 공유되어 있음.
-> 아래 원칙을 반드시 지켜서 저장소에는 절대 남기지 않는다.**
+> **⚠️ 현재 이 이슈 본문에 아래가 평문으로 공유되어 있어 외부 노출 상태입니다.
+> 계획서 확정 즉시 모두 rotate(재발급) 해주세요.**
+>
+> - 배다리도서관 계정 비밀번호
+> - Gemini API 키 (Google AI Studio → API keys → Delete & Create new)
 
-1. `tlduf1 / guswk0925!` 자격증명을 코드/HTML/커밋에 **쓰지 않는다**.
-2. 서버 루트에 `.env` 파일로만 보관:
+### 저장 원칙
+
+1. 자격증명/토큰을 **코드·HTML·커밋·PR 본문** 어디에도 쓰지 않는다.
+2. 서버 루트에 `.env` 파일로만 보관 (파일명 예시):
    ```
-   PTLIB_ID=tlduf1
-   PTLIB_PW=guswk0925!
+   PTLIB_ID=...
+   PTLIB_PW=...
+   GEMINI_API_KEY=...
    EXA_API_KEY=...
    ```
-3. `.gitignore` 에 `.env`, `node_modules/`, `dist/` 추가.
-4. (권장) 공유된 비밀번호는 계획서 확정 후 **반드시 재설정**.
-5. 백엔드는 로컬/사내 네트워크에서만 동작하도록 `localhost` 바인딩
-   기본값. 외부에 올릴 경우 최소한 Basic Auth + HTTPS 필수.
+3. `.gitignore` 에 `.env`, `node_modules/`, `dist/`, `.cache/` 추가.
+4. 저장소에는 키 이름만 적힌 `.env.example` 만 커밋.
+5. 백엔드는 **`127.0.0.1`(localhost)에만 바인딩**, 외부 포트 개방 안 함.
+6. 본 프로젝트는 **개인 로컬 전용** — 배포/공유 계획 없음.
 
 ---
 
@@ -132,7 +143,10 @@ SNS(인스타, 블로그, 유튜브 등)에서 추천받아 카카오톡으로 �
 처리:
 1. Exa MCP `search` 로 “`{title} {author} 책 리뷰 요약`” 질의
 2. 상위 결과 본문을 Exa `contents` 로 수집
-3. 3~5줄 한국어 요약으로 정리 (LLM 호출 또는 Exa 자체 요약)
+3. 수집한 본문을 **Gemini API (`gemini-2.5-flash`)** 로 한국어 3~5줄 요약
+   - `@google/genai` SDK 사용
+   - 시스템 프롬프트: “책 내용과 평점 경향을 사실 위주로 3~5줄 한국어로
+     요약하라. 과장/스포일러 금지, 출처를 각 문장에 근거하라.”
 출력: `{ summary, sources:[{title,url}] }`
 
 ### 5.5 `/api/search` (오케스트레이터)
@@ -160,7 +174,8 @@ baedari/
 │  ├─ lib/
 │  │  ├─ ptlib.js           ← 배다리도서관 클라이언트
 │  │  ├─ snsParser.js
-│  │  └─ exaClient.js
+│  │  ├─ exaClient.js
+│  │  └─ gemini.js          ← Gemini 요약 래퍼
 │  └─ cache/                ← 책별 결과 캐시(선택)
 └─ public/
    ├─ index.html
@@ -170,19 +185,25 @@ baedari/
 
 ---
 
-## 7. MCP 사용 계획
+## 7. 외부 서비스 사용 계획
 
-### 7.1 Exa MCP (구글 검색 & 요약)
+### 7.1 Exa MCP (웹 검색·본문 수집)
 - 설치: `smithery mcp add exa`
 - 사용 호출: `exa.search`, `exa.contents`
-- 용도: 책 리뷰/요약/ISBN 보강
+- 용도: 책 리뷰·ISBN 보강용 웹 검색과 본문 수집
 
-### 7.2 Context7 MCP (UI 레퍼런스)
+### 7.2 Gemini API (요약)
+- SDK: `@google/genai`
+- 모델: `gemini-2.5-flash` (저렴·빠름, 요약 용도 충분)
+- 입력: Exa가 가져온 리뷰/소개 본문 묶음
+- 출력: 한국어 3~5줄 요약 + 간단한 평가 톤
+
+### 7.3 Context7 MCP (UI 레퍼런스)
 - 설치: `smithery mcp add upstash/context7-mcp`
 - 용도: Tailwind / shadcn-ui / 카드 레이아웃 예제 받아
   `index.html` 디자인 품질 향상
 
-> MCP 키/토큰도 반드시 `.env` 로만 관리.
+> 모든 MCP 키·API 키는 반드시 `.env` 로만 관리.
 
 ---
 
@@ -205,23 +226,27 @@ baedari/
   - OG 기반 파싱 + 2~3개 실제 SNS URL로 테스트
 - **M3. 배다리도서관 클라이언트** (`/api/library-search`)
   - 사이트 실제 호출 흐름 조사 → 로그인 → 검색 → 파싱
-- **M4. Exa MCP 요약** (`/api/summarize`)
+- **M4. Exa 검색 + Gemini 요약** (`/api/summarize`)
 - **M5. 프론트엔드 결과 카드 UI** (Context7 MCP 참고)
 - **M6. 통합 & 다건 테스트**
 - **M7. (선택) 결과 캐시 + 즐겨찾기**
 
 ---
 
-## 10. 확인이 필요한 사항 (사용자께)
+## 10. 확정 사항 & 남은 질문
 
-1. 백엔드(Node.js) 돌리는 방식 괜찮은지? (완전한 `index.html` 1파일은
-   기술적으로 불가능)
-2. 우선 **로컬 PC에서만** 실행하는 버전으로 만들면 되는지,
-   아니면 배포(HTTPS)까지 고려해야 하는지?
-3. 공유해주신 도서관 **비밀번호 재설정** 의향이 있으신지?
-   (이 이슈에 평문으로 남아있는 상태는 위험)
-4. 파싱 대상 SNS 플랫폼 우선순위 (네이버블로그 / 인스타 / 유튜브 / 브런치…)?
-5. 요약에 외부 LLM(API 키) 사용이 가능한지, 아니면 Exa 자체 요약만
-   쓸지?
+### ✅ 확정
+- 개인용, 로컬(127.0.0.1) 전용
+- 요약은 Gemini (`gemini-2.5-flash`)
+- Node.js + Express 백엔드 + 정적 `index.html`
 
-위 항목들 답변 주시면 M1부터 바로 착수하겠습니다.
+### ❓ 남은 질문
+1. **도서관 비밀번호 / Gemini API 키 재발급** 하셨나요?
+   (이슈 평문 노출된 키는 반드시 폐기 권장)
+2. 파싱 대상 SNS 플랫폼 **우선순위** — 가장 자주 쓰시는 곳부터
+   알려주세요 (예: 네이버블로그 > 인스타 > 유튜브 > 브런치 > X/트위터).
+3. 인스타그램/X 등 **로그인 없이 OG 파싱 막힌 사이트** 는
+   일단 “제목 수동 입력” 폴백으로 갈까요, 아니면 추가 우회(oEmbed/RSS)
+   까지 넣을까요?
+
+답변 주시면 바로 M1(스켈레톤) 착수합니다.
