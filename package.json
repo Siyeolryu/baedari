@@ -1,0 +1,19 @@
+{
+  "name": "baedari-book-finder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal tool: look up SNS-recommended books in Baedari Library (ptlib.go.kr) and summarize via Gemini.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^0.7.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "got": "^14.4.4",
+    "tough-cookie": "^5.0.0"
+  }
+}

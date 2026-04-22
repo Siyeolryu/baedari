@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>배다리도서관 SNS 책 찾기</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body { font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-800">
+    <div class="max-w-3xl mx-auto px-4 py-8">
+      <header class="mb-6">
+        <h1 class="text-2xl font-bold">📚 배다리도서관 SNS 책 찾기</h1>
+        <p class="text-sm text-slate-500 mt-1">
+          카카오톡에서 복사한 SNS 링크(한 줄에 하나)를 붙여넣으면, 배다리도서관
+          소장 여부·위치·대출 상태를 확인하고 구글 리뷰 요약까지 보여줘요.
+        </p>
+      </header>
+
+      <section class="bg-white rounded-lg shadow-sm p-4 mb-6">
+        <label class="block text-sm font-medium mb-2" for="inputs">
+          URL 또는 책 제목 (한 줄에 하나)
+        </label>
+        <textarea
+          id="inputs"
+          rows="5"
+          class="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="https://blog.naver.com/.../&#10;채식주의자&#10;https://www.instagram.com/p/..."
+        ></textarea>
+        <div class="flex items-center gap-2 mt-3">
+          <button id="run" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded px-4 py-2 text-sm font-medium">
+            찾기
+          </button>
+          <span id="status" class="text-xs text-slate-500"></span>
+        </div>
+      </section>
+
+      <section id="results" class="space-y-4"></section>
+    </div>
+
+    <template id="card-tpl">
+      <article class="bg-white rounded-lg shadow-sm p-4">
+        <header class="flex gap-3 mb-3">
+          <img class="thumb w-16 h-24 object-cover rounded bg-slate-100" alt="" />
+          <div class="flex-1 min-w-0">
+            <div class="text-xs text-slate-400 src truncate"></div>
+            <h2 class="title text-lg font-bold truncate"></h2>
+            <div class="meta text-xs text-slate-500 mt-1"></div>
+          </div>
+        </header>
+
+        <div class="lib-section mb-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-sm font-semibold">📚 배다리도서관</span>
+            <span class="lib-badge text-xs rounded px-2 py-0.5"></span>
+          </div>
+          <ul class="lib-items text-sm space-y-1"></ul>
+        </div>
+
+        <details class="sum-section">
+          <summary class="text-sm font-semibold cursor-pointer select-none">📝 구글 요약</summary>
+          <div class="sum-body mt-2 text-sm whitespace-pre-line text-slate-700"></div>
+          <ul class="sum-sources mt-2 text-xs text-slate-500 space-y-0.5"></ul>
+        </details>
+
+        <div class="err text-sm text-rose-600 mt-2 hidden"></div>
+      </article>
+    </template>
+
+    <script>
+      const $ = (s, el = document) => el.querySelector(s);
+      const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+      function renderCard(r) {
+        const tpl = $('#card-tpl').content.cloneNode(true);
+        const root = tpl.querySelector('article');
+
+        const title = r.extract?.bestGuessTitle || r.input;
+        $('.title', root).textContent = title;
+        $('.src', root).textContent = r.extract?.sourceUrl || (r.input?.startsWith('http') ? r.input : '직접 입력');
+        const thumb = r.extract?.thumbnail;
+        if (thumb) $('.thumb', root).src = thumb;
+        else $('.thumb', root).remove();
+        const metaBits = [r.extract?.author, r.extract?.isbn ? 'ISBN ' + r.extract.isbn : null].filter(Boolean);
+        $('.meta', root).textContent = metaBits.join(' · ');
+
+        // 에러
+        if (r.error) {
+          const e = $('.err', root);
+          e.textContent = r.error;
+          e.classList.remove('hidden');
+        }
+
+        // 도서관
+        const lib = r.library || {};
+        const libUl = $('.lib-items', root);
+        const badge = $('.lib-badge', root);
+        if (lib.error) {
+          badge.textContent = '조회 실패';
+          badge.className = 'lib-badge text-xs rounded px-2 py-0.5 bg-rose-100 text-rose-700';
+          libUl.innerHTML = `<li class="text-rose-600">${lib.error}</li>`;
+        } else if (!lib.found) {
+          badge.textContent = '미보유';
+          badge.className = 'lib-badge text-xs rounded px-2 py-0.5 bg-slate-200 text-slate-700';
+        } else {
+          const anyAvail = lib.items.some((i) => i.availability === 'available');
+          badge.textContent = anyAvail ? '대출가능' : '대출중';
+          badge.className =
+            'lib-badge text-xs rounded px-2 py-0.5 ' +
+            (anyAvail ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700');
+          libUl.innerHTML = lib.items
+            .slice(0, 8)
+            .map((it) => {
+              const stateClass =
+                it.availability === 'available'
+                  ? 'text-emerald-700'
+                  : it.availability === 'checkedOut'
+                    ? 'text-amber-700'
+                    : 'text-slate-600';
+              const parts = [
+                `<b>${escapeHtml(it.title)}</b>`,
+                it.author ? `<span class="text-slate-500">${escapeHtml(it.author)}</span>` : '',
+                it.room ? `📍 ${escapeHtml(it.room)}` : '',
+                it.callNumber ? `<code class="text-xs">${escapeHtml(it.callNumber)}</code>` : '',
+                it.stateText ? `<span class="${stateClass}">${escapeHtml(it.stateText)}</span>` : '',
+              ].filter(Boolean);
+              return `<li>${parts.join(' · ')}</li>`;
+            })
+            .join('');
+          if (lib.total && lib.total > lib.items.length) {
+            libUl.innerHTML += `<li class="text-xs text-slate-400">…외 ${lib.total - lib.items.length}건</li>`;
+          }
+        }
+
+        // 요약
+        const sum = r.summary || {};
+        if (sum.error) {
+          $('.sum-body', root).textContent = '요약 실패: ' + sum.error;
+        } else if (!sum.summary) {
+          $('.sum-body', root).textContent =
+            (sum.skipped && sum.skipped.length)
+              ? '요약 생략됨 (' + sum.skipped.join(', ') + ')'
+              : '요약 결과 없음';
+        } else {
+          $('.sum-body', root).textContent = sum.summary;
+        }
+        const srcUl = $('.sum-sources', root);
+        (sum.sources || []).forEach((s) => {
+          const li = document.createElement('li');
+          li.innerHTML = `· <a class="hover:underline" href="${s.url}" target="_blank" rel="noreferrer">${escapeHtml(s.title || s.url)}</a>`;
+          srcUl.appendChild(li);
+        });
+
+        return tpl;
+      }
+
+      function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[c]);
+      }
+
+      async function run() {
+        const raw = $('#inputs').value
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (!raw.length) return;
+
+        const status = $('#status');
+        const results = $('#results');
+        results.innerHTML = '';
+        status.textContent = `검색 중… (${raw.length}건)`;
+        $('#run').disabled = true;
+
+        try {
+          const res = await fetch('/api/search', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ inputs: raw }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || '서버 오류');
+          data.results.forEach((r) => results.appendChild(renderCard(r)));
+          status.textContent = `완료 (${data.results.length}건)`;
+        } catch (e) {
+          status.textContent = '오류: ' + e.message;
+        } finally {
+          $('#run').disabled = false;
+        }
+      }
+
+      $('#run').addEventListener('click', run);
+      $('#inputs').addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') run();
+      });
+    </script>
+  </body>
+</html>
